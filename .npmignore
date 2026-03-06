@@ -1,0 +1,18 @@
+# Source (consumers only need dist)
+src/
+
+# Config files
+tsconfig.json
+tsup.config.ts
+.eslintrc*
+.prettierrc*
+
+# Dev/test
+*.test.ts
+*.spec.ts
+coverage/
+.github/
+
+# Misc
+.DS_Store
+*.log

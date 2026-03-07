@@ -3,6 +3,7 @@
   "version": "0.1.2",
   "description": "Adapter utilities for registering MCP tools",
   "author": "jalpp",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/jalpp/mcp-adapter.git"

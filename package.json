@@ -1,19 +1,19 @@
 {
-  "name": "mcp-adapter",
-  "version": "0.1.0",
+  "name": "@jalpp/mcp-adapter",
+  "version": "0.1.1",
   "description": "Adapter utilities for registering MCP tools",
   "author": "jalpp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jalpp/mcp-adapter.git"
+    "url": "git+https://github.com/jalpp/mcp-adapter.git"
   },
-  "main": "./dist/index.cjs",
+  "type": "module",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
       "types": "./dist/index.d.ts"
     }
   },

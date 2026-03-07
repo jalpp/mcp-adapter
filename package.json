@@ -1,6 +1,6 @@
 {
   "name": "@jalpp/mcp-adapter",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Adapter utilities for registering MCP tools",
   "author": "jalpp",
   "license": "MIT",

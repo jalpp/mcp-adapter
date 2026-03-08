@@ -1,6 +1,6 @@
 # @jalpp/mcp-adapter
 
-Lightweight adapter utilities for registering tools on an [MCP](https://modelcontextprotocol.io) server with full TypeScript type safety. Supports manual tool registration and automatic HTTP endpoint-to-tool bridging with built-in auth.
+Lightweight adapter utilities for registering tools on an [MCP](https://modelcontextprotocol.io) server with full TypeScript type safety. Supports manual tool registration and automatic HTTP endpoint-to-tool bridging with built-in auth, path variables, and method-specific adapters.
 
 ## Installation
 
@@ -16,26 +16,170 @@ npm install @modelcontextprotocol/sdk zod axios
 
 ## Adapters
 
-| Adapter | Description |
-|---------|-------------|
-| `toolAdapter` | Register a tool with a typed callback |
-| `toolContentAdapter` | Normalize a result into a `CallToolResult` |
-| `httpToolAdapter` | Register an HTTP endpoint directly as a tool |
+| Adapter | Method | Description |
+|---------|--------|-------------|
+| `toolAdapter` | any | Register a tool with a typed callback |
+| `toolContentAdapter` | — | Normalize a result into a `CallToolResult` |
+| `httpToolAdapter` | any | Register any HTTP endpoint as a tool |
+| `getToolAdapter` | GET | Register a GET endpoint — args → query params |
+| `postToolAdapter` | POST | Register a POST endpoint — args → request body |
+| `putToolAdapter` | PUT | Register a PUT endpoint — args → request body |
+| `patchToolAdapter` | PATCH | Register a PATCH endpoint — args → request body |
+| `deleteToolAdapter` | DELETE | Register a DELETE endpoint — args → query params |
+
+---
+
+## Path Variables
+
+All HTTP adapters support `:paramName` path variable syntax. Any input arg whose name matches a path variable is interpolated into the URL and removed from query params / request body.
+
+```ts
+getToolAdapter(server, {
+  name: "get-game-details",
+  description: "Fetch a game by ID",
+  endpoint: "https://api.example.com/games/:gameId",
+  inputSchema: {
+    gameId: z.string().describe("Game ID"),
+    expand: z.string().optional().describe("Optional fields to expand"),
+  },
+  auth: { type: "bearer", token: process.env.API_TOKEN! },
+});
+// GET https://api.example.com/games/abc123?expand=moves
+```
+
+---
+
+## `getToolAdapter`
+
+Registers a GET endpoint as an MCP tool. Remaining args (after path variable interpolation) are sent as **query parameters**.
+
+```ts
+import { getToolAdapter } from "@jalpp/mcp-adapter";
+import z from "zod";
+
+getToolAdapter(server, {
+  name: "get-user",
+  description: "Fetch a user by ID",
+  endpoint: "https://api.example.com/users/:userId",
+  inputSchema: {
+    userId: z.string().describe("User ID"),
+    expand: z.string().optional().describe("Comma-separated fields to expand"),
+  },
+  auth: { type: "bearer", token: process.env.API_TOKEN! },
+});
+// → GET https://api.example.com/users/abc123?expand=profile
+```
+
+---
+
+## `postToolAdapter`
+
+Registers a POST endpoint as an MCP tool. Remaining args (after path variable interpolation) are sent as the **JSON request body**.
+
+```ts
+import { postToolAdapter } from "@jalpp/mcp-adapter";
+
+postToolAdapter(server, {
+  name: "create-post",
+  description: "Create a new post for a user",
+  endpoint: "https://api.example.com/users/:userId/posts",
+  inputSchema: {
+    userId: z.string().describe("User ID"),
+    title: z.string().describe("Post title"),
+    body: z.string().describe("Post body"),
+  },
+  auth: { type: "bearer", token: process.env.API_TOKEN! },
+});
+// → POST https://api.example.com/users/abc123/posts  { title, body }
+```
+
+---
+
+## `putToolAdapter`
+
+Registers a PUT endpoint as an MCP tool. Remaining args are sent as the **JSON request body**.
+
+```ts
+putToolAdapter(server, {
+  name: "update-user",
+  description: "Replace a user record",
+  endpoint: "https://api.example.com/users/:userId",
+  inputSchema: {
+    userId: z.string(),
+    name: z.string(),
+    email: z.string(),
+  },
+  auth: { type: "bearer", token: process.env.API_TOKEN! },
+});
+// → PUT https://api.example.com/users/abc123  { name, email }
+```
+
+---
+
+## `patchToolAdapter`
+
+Registers a PATCH endpoint as an MCP tool. Remaining args are sent as the **JSON request body**.
+
+```ts
+patchToolAdapter(server, {
+  name: "update-post-title",
+  description: "Partially update a post",
+  endpoint: "https://api.example.com/posts/:postId",
+  inputSchema: {
+    postId: z.string(),
+    title: z.string(),
+  },
+  auth: { type: "bearer", token: process.env.API_TOKEN! },
+});
+// → PATCH https://api.example.com/posts/xyz789  { title }
+```
+
+---
+
+## `deleteToolAdapter`
+
+Registers a DELETE endpoint as an MCP tool. Remaining args (after path variable interpolation) are sent as **query parameters**.
+
+```ts
+deleteToolAdapter(server, {
+  name: "delete-post",
+  description: "Delete a post by ID",
+  endpoint: "https://api.example.com/posts/:postId",
+  inputSchema: { postId: z.string() },
+  auth: { type: "bearer", token: process.env.API_TOKEN! },
+});
+// → DELETE https://api.example.com/posts/xyz789
+```
+
+---
+
+## `httpToolAdapter`
+
+Lower-level adapter that accepts an explicit `method` field. Use this when the method needs to be dynamic or you prefer a single unified call style.
+
+```ts
+import { httpToolAdapter } from "@jalpp/mcp-adapter";
+
+httpToolAdapter(server, {
+  name: "get-analysis",
+  description: "Fetch position analysis",
+  endpoint: "https://api.example.com/analyze",
+  method: "POST",
+  inputSchema: { fen: z.string(), depth: z.number() },
+  auth: { type: "bearer", token: process.env.API_TOKEN! },
+});
+```
 
 ---
 
 ## `toolAdapter`
 
-Registers a typed tool on an `McpServer`. Input schema types flow through to the callback automatically — no manual type annotations needed.
+Registers a tool with a fully custom typed callback. Use when you need data transformation, custom error handling, or logic that goes beyond a single HTTP call.
 
 **With input schema:**
 
 ```ts
 import { toolAdapter, toolContentAdapter } from "@jalpp/mcp-adapter";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import z from "zod";
-
-const server = new McpServer({ name: "my-server", version: "1.0.0" });
 
 toolAdapter(server, {
   name: "get-analysis",
@@ -59,9 +203,7 @@ toolAdapter(server, {
 ```ts
 toolAdapter(server, {
   name: "get-status",
-  config: {
-    description: "Returns current server status",
-  },
+  config: { description: "Returns current server status" },
   cb: async () => {
     const { data, error } = await myService.getStatus();
     return toolContentAdapter(data ?? {}, error);
@@ -73,108 +215,50 @@ toolAdapter(server, {
 
 ## `toolContentAdapter`
 
-Normalizes a service result into a `CallToolResult` text block. If `error` is defined it takes priority; otherwise `data` is serialized as pretty-printed JSON.
+Normalizes a result into a `CallToolResult` text block. If `error` is defined it takes priority; otherwise `data` is serialized as pretty-printed JSON.
 
 ```ts
-import { toolContentAdapter } from "@jalpp/mcp-adapter";
-
 return toolContentAdapter(data ?? {}, error);
 ```
 
 | Argument | Type | Description |
 |----------|------|-------------|
 | `data` | `object` | Successful result payload |
-| `error` | `string \| undefined` | Error message — takes priority over `data` when present |
+| `error` | `string \| undefined` | Error message — takes priority over `data` |
 
 ---
 
-## `httpToolAdapter`
+## Authentication
 
-Registers an HTTP endpoint directly as an MCP tool. Handles the full request lifecycle — auth headers, query params vs request body, and error mapping — so you only need to declare the tool metadata and schema.
+All HTTP adapters accept an optional `auth` field. Three strategies are supported:
 
-- **GET** requests map input args to **query parameters**
-- **POST / PUT / PATCH / DELETE** map input args to the **JSON request body**
-
-**With input schema:**
-
+**Bearer token** — `Authorization: Bearer <token>`:
 ```ts
-import { httpToolAdapter } from "@jalpp/mcp-adapter";
-import z from "zod";
-
-httpToolAdapter(server, {
-  name: "get-analysis",
-  description: "Fetch position analysis from external API",
-  endpoint: "https://api.example.com/analyze",
-  method: "POST",
-  inputSchema: {
-    fen: z.string().describe("FEN string"),
-    depth: z.number().min(1).max(20),
-  },
-  auth: {
-    type: "bearer",
-    token: process.env.API_TOKEN!,
-  },
-});
+auth: { type: "bearer", token: process.env.API_TOKEN! }
 ```
 
-**Without input schema:**
-
+**API key** — custom header:
 ```ts
-httpToolAdapter(server, {
-  name: "get-server-status",
-  description: "Fetch API health status",
-  endpoint: "https://api.example.com/status",
-  method: "GET",
-});
+auth: { type: "apikey", header: "X-API-Key", key: process.env.API_KEY! }
 ```
 
-### Authentication
-
-Three auth strategies are supported, all passed via the `auth` field:
-
-**Bearer token** — sends `Authorization: Bearer <token>`:
-
+**Basic auth** — `Authorization: Basic <base64>`:
 ```ts
-auth: {
-  type: "bearer",
-  token: process.env.API_TOKEN!,
-}
+auth: { type: "basic", username: "user", password: process.env.PASSWORD! }
 ```
 
-**API key** — sends the key in a custom header:
+---
+
+## Extra axios config
+
+Pass any [axios request config](https://axios-http.com/docs/req_config) via `axiosConfig`:
 
 ```ts
-auth: {
-  type: "apikey",
-  header: "X-API-Key",
-  key: process.env.API_KEY!,
-}
-```
-
-**Basic auth** — sends `Authorization: Basic <base64(username:password)>`:
-
-```ts
-auth: {
-  type: "basic",
-  username: "myuser",
-  password: process.env.PASSWORD!,
-}
-```
-
-### Extra axios config
-
-Pass any additional [axios request config](https://axios-http.com/docs/req_config) via `axiosConfig`:
-
-```ts
-httpToolAdapter(server, {
+getToolAdapter(server, {
   name: "get-data",
   description: "Fetch with custom timeout",
   endpoint: "https://api.example.com/data",
-  method: "GET",
-  axiosConfig: {
-    timeout: 5000,
-    headers: { "Accept-Language": "en" },
-  },
+  axiosConfig: { timeout: 5000 },
 });
 ```
 
@@ -182,23 +266,17 @@ httpToolAdapter(server, {
 
 ## API Reference
 
-### `toolAdapter(server, adapter)`
+### Method-specific adapters
 
-| Overload | When to use |
-|----------|-------------|
-| `toolAdapter<T>(server, ToolInputAdapterWithSchema<T>)` | Tool that receives typed input args |
-| `toolAdapter(server, ToolInputAdapterWithoutSchema)` | Tool that takes no input |
+| Function | Method | Args mapping |
+|----------|--------|--------------|
+| `getToolAdapter` | GET | remaining args → query params |
+| `postToolAdapter` | POST | remaining args → request body |
+| `putToolAdapter` | PUT | remaining args → request body |
+| `patchToolAdapter` | PATCH | remaining args → request body |
+| `deleteToolAdapter` | DELETE | remaining args → query params |
 
-### `toolContentAdapter(data, error)`
-
-Returns a `CallToolResult` with a single `text` content block.
-
-### `httpToolAdapter(server, adapter)`
-
-| Overload | When to use |
-|----------|-------------|
-| `httpToolAdapter<T>(server, HttpToolAdapterWithSchema<T>)` | Endpoint that receives typed input args |
-| `httpToolAdapter(server, HttpToolAdapterWithoutSchema)` | Endpoint that takes no input |
+All support optional `inputSchema` and `:paramName` path variables.
 
 ### Auth types
 

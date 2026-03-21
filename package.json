@@ -1,6 +1,6 @@
 {
   "name": "@jalpp/mcp-adapter",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Adapter utilities for registering MCP tools with full TypeScript type safety — supports typed callbacks and automatic HTTP endpoint bridging with auth",
   "author": "jalpp",
   "license": "MIT",

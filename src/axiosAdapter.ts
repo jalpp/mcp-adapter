@@ -61,6 +61,20 @@ export interface HttpToolAdapterWithSchema<T extends ZodRawShapeCompat> {
   inputSchema: T;
   /** Optional authentication strategy. */
   auth?: HttpAuth;
+  /**
+   * Optional name of the input parameter whose value will be used as a runtime
+   * bearer token (`Authorization: Bearer <value>`). The parameter is consumed and
+   * never forwarded as a query param or body field.
+   *
+   * When both `tokenParam` and a static `auth` are provided, the runtime token
+   * takes precedence.
+   *
+   * @example
+   * // Schema includes { token: z.string(), userId: z.string() }
+   * tokenParam: "token"
+   * // → Authorization: Bearer <value of args.token>
+   */
+  tokenParam?: string;
   /** Optional extra axios config (e.g. headers, timeout). */
   axiosConfig?: AxiosRequestConfig;
 }
@@ -83,6 +97,11 @@ export interface HttpToolAdapterWithoutSchema {
   inputSchema?: undefined;
   /** Optional authentication strategy. */
   auth?: HttpAuth;
+  /**
+   * Not applicable when there is no input schema — included for type symmetry only.
+   * Use the schema variant if you need a runtime token param.
+   */
+  tokenParam?: never;
   /** Optional extra axios config (e.g. headers, timeout). */
   axiosConfig?: AxiosRequestConfig;
 }
@@ -177,6 +196,34 @@ function resolvePathParams(
 }
 
 /**
+ * Extracts a runtime bearer token from the input args when `tokenParam` is configured.
+ * The token field is removed from `args` so it is never forwarded downstream.
+ *
+ * When a runtime token is found it takes precedence over the static `auth` config.
+ *
+ * @param args       - Mutable copy of the tool input args.
+ * @param tokenParam - Name of the field carrying the bearer token, if any.
+ * @param staticAuth - The static auth config to fall back to.
+ * @returns The auth strategy to use for this request.
+ */
+function resolveAuth(
+  args: Record<string, unknown>,
+  tokenParam: string | undefined,
+  staticAuth: HttpAuth | undefined,
+): HttpAuth | undefined {
+  if (!tokenParam) return staticAuth;
+
+  const runtimeToken = args[tokenParam];
+  delete args[tokenParam]; // consume — never forward as param or body field
+
+  if (typeof runtimeToken === "string" && runtimeToken.length > 0) {
+    return { type: "bearer", token: runtimeToken };
+  }
+
+  return staticAuth;
+}
+
+/**
  * Executes an HTTP request using axios.
  *
  * - Path variables (`:paramName`) are interpolated from args and removed from the remaining args.
@@ -187,6 +234,7 @@ function resolvePathParams(
  * @param method      - HTTP method.
  * @param args        - Parsed tool input args.
  * @param auth        - Optional auth strategy.
+ * @param tokenParam  - Optional input field name whose value is used as a runtime bearer token.
  * @param extraConfig - Optional extra axios config merged into the request.
  * @returns `{ data }` on success or `{ error }` on failure.
  */
@@ -195,11 +243,17 @@ async function executeRequest(
   method: HttpMethod,
   args: Record<string, unknown>,
   auth?: HttpAuth,
+  tokenParam?: string,
   extraConfig?: AxiosRequestConfig,
 ): Promise<{ data?: object; error?: string }> {
   try {
-    const authHeaders = auth ? buildAuthHeaders(auth) : {};
-    const { url, remainingArgs } = resolvePathParams(endpoint, args);
+    // Work on a mutable copy so callers are not surprised by side-effects.
+    const mutableArgs = { ...args };
+
+    const resolvedAuth = resolveAuth(mutableArgs, tokenParam, auth);
+    const authHeaders = resolvedAuth ? buildAuthHeaders(resolvedAuth) : {};
+
+    const { url, remainingArgs } = resolvePathParams(endpoint, mutableArgs);
     const isQueryMethod = method === "GET" || method === "DELETE";
 
     const config: AxiosRequestConfig = {
@@ -235,6 +289,8 @@ async function executeRequest(
  * - Path variables (`:paramName`) are interpolated from input args.
  * - GET/DELETE: remaining args → query parameters.
  * - POST/PUT/PATCH: remaining args → JSON request body.
+ * - `tokenParam`: if set, the named input field is extracted and used as a runtime
+ *   bearer token, overriding the static `auth` config.
  *
  * @template T - Zod raw shape inferred from `inputSchema`.
  * @param server  - The `McpServer` instance to register the tool on.
@@ -253,13 +309,14 @@ export function httpToolAdapter<T extends ZodRawShapeCompat>(
   adapter: HttpToolAdapterWithSchema<T> | HttpToolAdapterWithoutSchema,
 ): void {
   if (adapter.inputSchema) {
-    const { endpoint, method, auth, axiosConfig, inputSchema } = adapter as HttpToolAdapterWithSchema<T>;
+    const { endpoint, method, auth, tokenParam, axiosConfig, inputSchema } =
+      adapter as HttpToolAdapterWithSchema<T>;
 
     toolAdapter(server, {
       name: adapter.name,
       config: { description: adapter.description, inputSchema },
       cb: (async (args: Record<string, unknown>) => {
-        const { data, error } = await executeRequest(endpoint, method, args, auth, axiosConfig);
+        const { data, error } = await executeRequest(endpoint, method, args, auth, tokenParam, axiosConfig);
         return toolContentAdapter(data ?? {}, error);
       }) as unknown as ToolCallback<T>,
     });
@@ -273,6 +330,7 @@ export function httpToolAdapter<T extends ZodRawShapeCompat>(
           adapter.method,
           {},
           adapter.auth,
+          undefined,
           adapter.axiosConfig,
         );
         return toolContentAdapter(data ?? {}, error);
@@ -296,10 +354,11 @@ export function httpToolAdapter<T extends ZodRawShapeCompat>(
  *   name: "get-user",
  *   description: "Fetch a user by ID",
  *   endpoint: "https://api.example.com/users/:userId",
- *   inputSchema: { userId: z.string(), expand: z.string().optional() },
- *   auth: { type: "bearer", token: process.env.API_TOKEN! },
+ *   inputSchema: { userId: z.string(), token: z.string(), expand: z.string().optional() },
+ *   tokenParam: "token",
  * });
  * // GET https://api.example.com/users/abc123?expand=profile
+ * // Authorization: Bearer <token>
  */
 export function getToolAdapter<T extends ZodRawShapeCompat>(
   server: McpServer,
@@ -331,10 +390,11 @@ export function getToolAdapter<T extends ZodRawShapeCompat>(
  *   name: "create-post",
  *   description: "Create a new post for a user",
  *   endpoint: "https://api.example.com/users/:userId/posts",
- *   inputSchema: { userId: z.string(), title: z.string(), body: z.string() },
- *   auth: { type: "bearer", token: process.env.API_TOKEN! },
+ *   inputSchema: { userId: z.string(), token: z.string(), title: z.string(), body: z.string() },
+ *   tokenParam: "token",
  * });
  * // POST https://api.example.com/users/abc123/posts  { title, body }
+ * // Authorization: Bearer <token>
  */
 export function postToolAdapter<T extends ZodRawShapeCompat>(
   server: McpServer,
@@ -366,10 +426,11 @@ export function postToolAdapter<T extends ZodRawShapeCompat>(
  *   name: "update-user",
  *   description: "Replace a user record",
  *   endpoint: "https://api.example.com/users/:userId",
- *   inputSchema: { userId: z.string(), name: z.string(), email: z.string() },
- *   auth: { type: "bearer", token: process.env.API_TOKEN! },
+ *   inputSchema: { userId: z.string(), token: z.string(), name: z.string(), email: z.string() },
+ *   tokenParam: "token",
  * });
  * // PUT https://api.example.com/users/abc123  { name, email }
+ * // Authorization: Bearer <token>
  */
 export function putToolAdapter<T extends ZodRawShapeCompat>(
   server: McpServer,
@@ -393,10 +454,11 @@ export function putToolAdapter<T extends ZodRawShapeCompat>(
  *   name: "update-post-title",
  *   description: "Partially update a post",
  *   endpoint: "https://api.example.com/posts/:postId",
- *   inputSchema: { postId: z.string(), title: z.string() },
- *   auth: { type: "bearer", token: process.env.API_TOKEN! },
+ *   inputSchema: { postId: z.string(), token: z.string(), title: z.string() },
+ *   tokenParam: "token",
  * });
  * // PATCH https://api.example.com/posts/xyz789  { title }
+ * // Authorization: Bearer <token>
  */
 export function patchToolAdapter<T extends ZodRawShapeCompat>(
   server: McpServer,
@@ -420,10 +482,11 @@ export function patchToolAdapter<T extends ZodRawShapeCompat>(
  *   name: "delete-post",
  *   description: "Delete a post by ID",
  *   endpoint: "https://api.example.com/posts/:postId",
- *   inputSchema: { postId: z.string() },
- *   auth: { type: "bearer", token: process.env.API_TOKEN! },
+ *   inputSchema: { postId: z.string(), token: z.string() },
+ *   tokenParam: "token",
  * });
  * // DELETE https://api.example.com/posts/xyz789
+ * // Authorization: Bearer <token>
  */
 export function deleteToolAdapter<T extends ZodRawShapeCompat>(
   server: McpServer,
